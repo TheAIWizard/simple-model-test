@@ -12,7 +12,8 @@ def main():
     
     # The model is logged with an input example
     # Step 1: Set the destination path for the model artifacts
-    model_uri = f"models:/{"test_wrapper_pytorch"}/{"31"}"
+    # model_uri = f"models:/{"test_wrapper_pytorch"}/{"31"}"
+    model_uri = 'runs:/1a5496ed174c45459a8fa106ff2a7d87/default'
     dst_path = "../my_model"
 
     # Step 2: Download/extract the model here *without loading it yet*
