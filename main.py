@@ -28,14 +28,13 @@ def upload_parquet(df: pd.DataFrame, path: str):
 
 
 def main():
-
-
     # The model is logged with an input example
     # Step 1: Set the destination path for the model artifacts
-    # model_uri = 's3://projet-ape/mlflow-artifacts/32/e5f154b7fd0a4e64811781a17019f81c/artifacts/pyfunc_model'
+    # model_uri = 's3://projet-ape/mlflow-artifacts/31/f93f3a6efbb649bca00cb4e5aecc298a/artifacts/pyfunc_model'
     # model_uri = 'runs:/fbcd5c2f97e645f1850dbfc3f139c564/default'
     # model_uri = 'runs:/1b6616da89eb45cea458012c5cb6820a/default'
-    model_uri = f"models:/{"FastText-APE-nace2025"}/{"9"}"
+    # model_uri = f"models:/{"FastText-pytorch-2025"}/{"8"}"
+    model_uri = 'runs:/05639a37f98244eea3c06cdeeecd9631/pyfunc_model'
     dst_path = "../my_model"
 
     # Step 2: Download/extract the model here *without loading it yet*
@@ -46,11 +45,10 @@ def main():
     nltk_data_path = os.path.join(dst_path, "artifacts", "nltk_data")
     nltk.data.path.append(nltk_data_path)
 
-    pyfunc_model = mlflow.pyfunc.load_model(os.path.join(dst_path, "default"))
-    # input_data = pyfunc_model.input_example
+    pyfunc_model = mlflow.pyfunc.load_model(os.path.join(dst_path, "pyfunc_model"))
 
-    libelle = ["apporteur d'affaires",
-               "conseiller mandataire vdi au sein de vorwerk france",
+    libelle = ["vente a distance",
+               "vente à distance sur catalogue",
                "apporteur d'affaire digital",
                "ACHAT REVENTE SUR INTERNET HABILLEMENT ACCESSOIRES ET CHAUSSURES",
                "Achat/vente de vinyles d'occasion en ligne",
@@ -75,6 +73,15 @@ def main():
         "activ_sec_agri_et": [None] * 15,
         "activ_nat_lib_et": [None] * 15
     })
+
+    # input_data = pyfunc_model.input_example
+    input_data = []
+    for text in libelle:
+        # Création du dictionnaire d'entrée avec SEULEMENT le champ essentiel
+        input_item = {
+            "description_activity": text,
+            }
+        input_data.append(input_item)
     print(pyfunc_model)
     print(input_data)
     print("MODEL_ID")
@@ -88,12 +95,40 @@ def main():
         input_data
     )
 
-    print(prediction)
-    print(prediction[0])
+    golden_tests = pd.read_csv('golden_tests.csv', encoding='utf8', delimiter=';')
+    upload_parquet(golden_tests, 's3://projet-ape/data/08112022_27102024/naf2025/golden_tests.parquet')
+
+    golden_tests["description_activity"]=golden_tests["libelle"]
+    golden_tests["activity_permanence_status"]=golden_tests["CRT"].fillna("NaN")
+
+    predictions_payload = []
+    list_of_dicts = golden_tests[["description_activity", "activity_permanence_status"]].to_dict(orient='records')
+    for record in list_of_dicts:
+        cleaned_record = {k: v for k, v in record.items() if v != "NaN"}
+        predictions_payload.append(cleaned_record)
+    print(predictions_payload)
+    print(list(predictions_payload))
+    predictions = pyfunc_model.predict(
+        predictions_payload
+    )
+    pred_dump = [prediction.model_dump() for prediction in predictions]
+    golden_tests["APE_prediction"] = [pred["1"]["code"] for pred in pred_dump]
+    golden_tests["IC"] = [pred["IC"] for pred in pred_dump]
+
+    print(golden_tests)
+    concordance_mask = (golden_tests['nace2025'] == golden_tests['APE_prediction'])
+    taux_concordance = concordance_mask.mean()
+    print(taux_concordance)
+    print(golden_tests["IC"].mean())
+    print(golden_tests["IC"].median())
+    gt_non_concordants = golden_tests[~concordance_mask]
+    print(gt_non_concordants[["libelle", "APE_prediction", "IC", "CRT"]])
+    upload_parquet(golden_tests, 's3://projet-ape/data/golden_tests_results.parquet')
+    upload_parquet(gt_non_concordants, 's3://projet-ape/data/golden_tests_error.parquet')
 
     # Lire le CSV dans un DataFrame
-    df = pd.read_csv('resultats_comparaison_ape_complet.csv', encoding='utf8', delimiter=';')
-    print(df)
+    df = pd.read_csv('resultats_comparaison_ape.csv', encoding='utf8', delimiter=' ')
+   
 
     # 3. Extraire la colonne 'Texte_Descriptif' et appliquer la prédiction
     text_input = df['Texte_Descriptif'].tolist()
@@ -109,23 +144,34 @@ def main():
         "activ_nat_lib_et": [None] * len(text_input)
         })
 
+    pytorch_input_data = []
+    for text in text_input:
+        # Création du dictionnaire d'entrée avec SEULEMENT le champ essentiel
+        input_item = {
+            "description_activity": text,
+            }
+        pytorch_input_data.append(input_item)
+
     predictions = pyfunc_model.predict(
-        input_data
+        pytorch_input_data
     )
 
-    print(text_input)
-
-    predicted_labels, predicted_probs = predictions
+    # predicted_labels, predicted_probs = predictions
+    pred_dump = [prediction.model_dump() for prediction in predictions]
+    predicted_labels = [pred["1"]["code"] for pred in pred_dump]
+    predicted_IC = [pred["IC"] for pred in pred_dump]
 
     df = df[["Texte_Descriptif", "APE_Propose", "APE_DV2"]]
     # 4. Nettoyer les résultats et les ajouter au DataFrame
-    df['Predicted_APE'] = [label[0].replace('__label__', '') for label in predicted_labels]
-    df['Prediction_Probability'] = [prob[0] for prob in predicted_probs]
+    # df['Predicted_APE'] = [label[0].replace('__label__', '') for label in predicted_labels]
+    # df['Prediction_Probability'] = [prob[0] for prob in predicted_probs]
+    df['Predicted_APE'] = predicted_labels
+    df['IC'] = predicted_IC
 
     # 5. Afficher le DataFrame résultant
-    print(df)
+    # print(df)
 
-    # upload_parquet(df, 's3://projet-ape/data/compare_model_stock.parquet')
+    # upload_parquet(df, 's3://projet-ape/data/compare_model_torch.parquet')
 
 
 if __name__ == "__main__":
