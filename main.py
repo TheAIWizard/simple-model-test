@@ -1,17 +1,31 @@
-from mlflow.models import Model
-import s3fs
-import mlflow
-import nltk
+# ──────────────────────────────────────────────────────────────────────────────
+# 1️⃣  Imports & Logging
+# ──────────────────────────────────────────────────────────────────────────────
 import os
+import logging
+from pathlib import Path
+from typing import List, Dict, Any
+
 import pandas as pd
+import mlflow
+import s3fs
+import nltk
 
-nltk.download('stopwords')
+# Download the NLTK stop‑words once
+nltk.download("stopwords")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+log = logging.getLogger(__name__)
 
 
-def get_filesystem():
-    """
-    Configure and return a S3-compatible filesystem (MinIO / AWS S3).
-    """
+# ──────────────────────────────────────────────────────────────────────────────
+# 2️⃣  Configuration helpers
+# ──────────────────────────────────────────────────────────────────────────────
+def get_s3_filesystem() -> s3fs.S3FileSystem:
+    """Create an s3fs file system that works with MinIO *or* AWS S3."""
     return s3fs.S3FileSystem(
         client_kwargs={"endpoint_url": f"https://{os.environ['AWS_S3_ENDPOINT']}"},
         key=os.environ["AWS_ACCESS_KEY_ID"],
@@ -19,160 +33,157 @@ def get_filesystem():
     )
 
 
-def upload_parquet(df: pd.DataFrame, path: str):
+def upload_parquet(df: pd.DataFrame, s3_uri: str) -> None:
     """
-    Save DataFrame as Parquet to local or S3.
+    Write *df* to *s3_uri* in Parquet format using the configured S3 file system.
     """
-    fs = get_filesystem()
-    return df.to_parquet(path, index=False, filesystem=fs)
+    fs = get_s3_filesystem()
+    log.info(f"Uploading dataframe to {s3_uri}")
+    df.to_parquet(s3_uri, index=False, filesystem=fs, engine="pyarrow")
 
 
-def main():
-    # The model is logged with an input example
-    # Step 1: Set the destination path for the model artifacts
-    # model_uri = 's3://projet-ape/mlflow-artifacts/31/f93f3a6efbb649bca00cb4e5aecc298a/artifacts/pyfunc_model'
-    # model_uri = 'runs:/fbcd5c2f97e645f1850dbfc3f139c564/default'
-    # model_uri = 'runs:/1b6616da89eb45cea458012c5cb6820a/default'
-    # model_uri = f"models:/{"FastText-pytorch-2025"}/{"8"}"
-    model_uri = 'runs:/05639a37f98244eea3c06cdeeecd9631/pyfunc_model'
-    dst_path = "../my_model"
+# ──────────────────────────────────────────────────────────────────────────────
+# 3️⃣  MLflow helpers
+# ──────────────────────────────────────────────────────────────────────────────
+def download_mlflow_artifact(
+    artifact_uri: str, dst_path: Path | str = "./tmp_artifacts"
+) -> Path:
+    """
+    Download artifacts from MLflow into *dst_path* and return the absolute path.
+    """
+    dst = Path(dst_path).expanduser().resolve()
+    log.info(f"Downloading artifact {artifact_uri} to {dst}")
+    mlflow.artifacts.download_artifacts(artifact_uri, dst_path=dst)
+    return dst
 
-    # Step 2: Download/extract the model here *without loading it yet*
-    print(dst_path)
-    print(mlflow.artifacts.download_artifacts(artifact_uri=model_uri, dst_path=dst_path))
 
-    # Step 3: Append the nltk_data/ folder to nltk path BEFORE loading the model
-    nltk_data_path = os.path.join(dst_path, "artifacts", "nltk_data")
-    nltk.data.path.append(nltk_data_path)
+def load_pyfunc_model(model_path: Path | str) -> mlflow.pyfunc.PyFuncModel:
+    """Load an MLflow pyfunc model from *model_path*."""
+    path = Path(model_path).expanduser()
+    log.info(f"Loading pyfunc model from {path}")
+    return mlflow.pyfunc.load_model(path)
 
-    pyfunc_model = mlflow.pyfunc.load_model(os.path.join(dst_path, "pyfunc_model"))
 
-    libelle = ["vente a distance",
-               "vente à distance sur catalogue",
-               "apporteur d'affaire digital",
-               "ACHAT REVENTE SUR INTERNET HABILLEMENT ACCESSOIRES ET CHAUSSURES",
-               "Achat/vente de vinyles d'occasion en ligne",
-               "PENSION POUR ANIMAUX DE COMPAGNIE",
-               "Nettoyage et entretien extérieur ( murs, terrasse, sols exterieurs, clôture, toiture, gouttière, espace vert )  traitement anti mousse et ap",
-               "création de site internet sans programmation (design, ergonomie...)",
-               "elevage bovin",
-               "Graphiste, conception de supports",
-               "coiffure hors salon",
-               "coach sportif",
-               "PROFESSEUR DE NATATION",
-               "coach en entreprise",
-               "Service de coaching, conseil sportifs et nutritionnels, individuel ou collectif, vente de programmes sportifs et alimentaires personnalisés"]
+# ──────────────────────────────────────────────────────────────────────────────
+# 4️⃣  Utility helpers
+# ──────────────────────────────────────────────────────────────────────────────
+def build_input_items(texts: List[str]) -> List[Dict[str, str]]:
+    """
+    Convert a list of free‑text strings into the list of dictionaries
+    expected by the model. Only the field `description_activity` is required.
+    """
+    return [{"description_activity": t} for t in texts]
 
-    input_data = pd.DataFrame({
-        "libelle": libelle,
-        "CJ": [None] * 15,  # Or pd.NA, or np.nan if you import numpy
-        "SRF": [None] * 15,
-        "NAT": [None] * 15,
-        "TYP": ["X"] * 15,
-        "CRT": [None] * 15,
-        "activ_sec_agri_et": [None] * 15,
-        "activ_nat_lib_et": [None] * 15
-    })
 
-    # input_data = pyfunc_model.input_example
-    input_data = []
-    for text in libelle:
-        # Création du dictionnaire d'entrée avec SEULEMENT le champ essentiel
-        input_item = {
-            "description_activity": text,
-            }
-        input_data.append(input_item)
-    print(pyfunc_model)
-    print(input_data)
-    print("MODEL_ID")
-    print(pyfunc_model._model_id)
-    print("RUN_ID")
-    print(pyfunc_model.metadata.run_id)
-    print(pyfunc_model.metadata)
-    print(pyfunc_model.model_config)
+def extract_prediction_fields(preds: List[mlflow.pyfunc.PyFuncModel]) -> List[Dict[str, Any]]:
+    """
+    Convert the list of `mlflow.pyfunc.PyFuncModel` objects returned by
+    `model.predict` into a plain Python list of dictionaries so that
+    it can be used like a normal pandas row.
+    """
+    return [pred.model_dump() for pred in preds]
 
-    prediction = pyfunc_model.predict(
-        input_data
+# ────────────────────────────────────────────────────────────────────────────────
+# 5️⃣  Pipeline Golden‑Tests (mis à jour)
+# ────────────────────────────────────────────────────────────────────────────────
+
+
+def run_golden_tests(
+    model: mlflow.pyfunc.PyFuncModel,
+    golden_csv: str,
+    upload_uri: str,
+) -> None:
+    """Exécute l’ensemble du pipeline de golden‑tests."""
+    # --- 1. Chargement des données
+    golden = pd.read_csv(golden_csv, encoding="utf8", delimiter=";")
+    log.info(f"Loaded {len(golden)} golden test rows")
+
+    # --- 2. Prédictions
+    input_items = build_input_items(golden["libelle"].tolist())
+    preds = model.predict(input_items)
+    pred_dicts = extract_prediction_fields(preds)
+
+    golden["APE_prediction"] = [d["1"]["code"] for d in pred_dicts]
+    golden["IC"] = [d["IC"] for d in pred_dicts]
+
+    # ── 3. Statistiques globales ------------------------------
+    overall_mean = golden["IC"].mean()
+    overall_median = golden["IC"].median()
+    log.info(f"Global IC – mean: {overall_mean:.4f}, median: {overall_median:.4f}")
+
+    # ── 4. Statistiques sur les IC par groupe ----------------
+    ok_mask = golden["nace2025"] == golden["APE_prediction"]
+    err_mask = ~ok_mask
+
+    # Concordants
+    ok_ic_mean = golden.loc[ok_mask, "IC"].mean()
+    ok_ic_median = golden.loc[ok_mask, "IC"].median()
+    log.info(f"Concordant IC – mean: {ok_ic_mean:.4f}, median: {ok_ic_median:.4f}")
+
+    # Non‑concordants
+    err_ic_mean = golden.loc[err_mask, "IC"].mean()
+    err_ic_median = golden.loc[err_mask, "IC"].median()
+    log.info(f"Non‑concordant IC – mean: {err_ic_mean:.4f}, median: {err_ic_median:.4f}")
+
+    # Rapport
+    concordance_rate = ok_mask.mean()
+    log.info(f"Concordance rate: {concordance_rate:.4f}")
+    log.info(f"Overall mean IC: {overall_mean:.4f}")
+    log.info(f"Overall median IC: {overall_median:.4f}")
+
+    # ── 5. Split & upload ------------------------------------
+    ok_rows = golden[ok_mask]
+    err_rows = golden[err_mask]
+
+    upload_parquet(golden, f"{upload_uri}/golden_tests_results.parquet")
+    upload_parquet(err_rows, f"{upload_uri}/golden_tests_error.parquet")
+    upload_parquet(ok_rows[["nace2025", "libelle", "CRT", "APE_prediction", "IC"]],
+                   f"{upload_uri}/golden_tests_ok.parquet")
+
+    log.debug(golden.head())
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 6️⃣  Main pipeline
+# ──────────────────────────────────────────────────────────────────────────────
+def main() -> None:
+    # ── 1️⃣  Configure & download model ───────────────────────────────────────
+    MODEL_URI = "runs:/4f09a147df0f4226ba45b49ae3a5a853/pyfunc_model"
+    dst_path = Path("../my_model").expanduser().resolve()
+    download_mlflow_artifact(MODEL_URI, dst_path)
+
+    # ── 2️⃣  Add NLTK data folder to the data path ─────────────────────────────
+    nltk_data_folder = dst_path / "artifacts" / "nltk_data"
+    nltk.data.path.append(str(nltk_data_folder))
+    log.info(f"NLTK data path updated: {nltk.data.path}")
+
+    # ── 3️⃣  Load the model ───────────────────────────────────────────────────
+    model = load_pyfunc_model(dst_path / "pyfunc_model")
+
+    # ── 4️⃣  Run golden‑tests pipeline ─────────────────────────────────────────
+    run_golden_tests(
+        model=model,
+        golden_csv="golden_tests.csv",
+        upload_uri="s3://projet-ape/data",
     )
 
-    golden_tests = pd.read_csv('golden_tests.csv', encoding='utf8', delimiter=';')
-    upload_parquet(golden_tests, 's3://projet-ape/data/08112022_27102024/naf2025/golden_tests.parquet')
+    # ── 5️⃣  Additional predictions on a second CSV ────────────────────────────
+    df = pd.read_csv("resultats_comparaison_ape.csv", encoding="utf8", delimiter=" ")
+    texts = df["Texte_Descriptif"].tolist()
 
-    golden_tests["description_activity"]=golden_tests["libelle"]
-    golden_tests["activity_permanence_status"]=golden_tests["CRT"].fillna("NaN")
+    preds = model.predict(build_input_items(texts))
+    pred_dicts = extract_prediction_fields(preds)
 
-    predictions_payload = []
-    list_of_dicts = golden_tests[["description_activity", "activity_permanence_status"]].to_dict(orient='records')
-    for record in list_of_dicts:
-        cleaned_record = {k: v for k, v in record.items() if v != "NaN"}
-        predictions_payload.append(cleaned_record)
-    print(predictions_payload)
-    print(list(predictions_payload))
-    predictions = pyfunc_model.predict(
-        predictions_payload
-    )
-    pred_dump = [prediction.model_dump() for prediction in predictions]
-    golden_tests["APE_prediction"] = [pred["1"]["code"] for pred in pred_dump]
-    golden_tests["IC"] = [pred["IC"] for pred in pred_dump]
+    df["Predicted_APE"] = [d["1"]["code"] for d in pred_dicts]
+    df["IC"] = [d["IC"] for d in pred_dicts]
 
-    print(golden_tests)
-    concordance_mask = (golden_tests['nace2025'] == golden_tests['APE_prediction'])
-    taux_concordance = concordance_mask.mean()
-    print(taux_concordance)
-    print(golden_tests["IC"].mean())
-    print(golden_tests["IC"].median())
-    gt_non_concordants = golden_tests[~concordance_mask]
-    print(gt_non_concordants[["libelle", "APE_prediction", "IC", "CRT"]])
-    upload_parquet(golden_tests, 's3://projet-ape/data/golden_tests_results.parquet')
-    upload_parquet(gt_non_concordants, 's3://projet-ape/data/golden_tests_error.parquet')
+    # Example upload – uncomment if you need it
+    # upload_parquet(df, "s3://projet-ape/data/compare_model_torch.parquet")
 
-    # Lire le CSV dans un DataFrame
-    df = pd.read_csv('resultats_comparaison_ape.csv', encoding='utf8', delimiter=' ')
-   
-
-    # 3. Extraire la colonne 'Texte_Descriptif' et appliquer la prédiction
-    text_input = df['Texte_Descriptif'].tolist()
-
-    input_data = pd.DataFrame({
-        "libelle": text_input,
-        "CJ": [None] * len(text_input),  # Or pd.NA, or np.nan if you import numpy
-        "SRF": [None] * len(text_input),
-        "NAT": [None] * len(text_input),
-        "TYP": [None] * len(text_input),
-        "CRT": [None] * len(text_input),
-        "activ_sec_agri_et": [None] * len(text_input),
-        "activ_nat_lib_et": [None] * len(text_input)
-        })
-
-    pytorch_input_data = []
-    for text in text_input:
-        # Création du dictionnaire d'entrée avec SEULEMENT le champ essentiel
-        input_item = {
-            "description_activity": text,
-            }
-        pytorch_input_data.append(input_item)
-
-    predictions = pyfunc_model.predict(
-        pytorch_input_data
-    )
-
-    # predicted_labels, predicted_probs = predictions
-    pred_dump = [prediction.model_dump() for prediction in predictions]
-    predicted_labels = [pred["1"]["code"] for pred in pred_dump]
-    predicted_IC = [pred["IC"] for pred in pred_dump]
-
-    df = df[["Texte_Descriptif", "APE_Propose", "APE_DV2"]]
-    # 4. Nettoyer les résultats et les ajouter au DataFrame
-    # df['Predicted_APE'] = [label[0].replace('__label__', '') for label in predicted_labels]
-    # df['Prediction_Probability'] = [prob[0] for prob in predicted_probs]
-    df['Predicted_APE'] = predicted_labels
-    df['IC'] = predicted_IC
-
-    # 5. Afficher le DataFrame résultant
-    # print(df)
-
-    # upload_parquet(df, 's3://projet-ape/data/compare_model_torch.parquet')
+    log.info("Pipeline finished successfully.")
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 7️⃣  Entrypoint
+# ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     main()
