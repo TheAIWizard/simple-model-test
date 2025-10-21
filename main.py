@@ -75,13 +75,16 @@ def build_input_items(texts: List[str]) -> List[Dict[str, str]]:
     return [{"description_activity": t} for t in texts]
 
 
-def extract_prediction_fields(preds: List[mlflow.pyfunc.PyFuncModel]) -> List[Dict[str, Any]]:
+def extract_prediction_fields(
+    preds: List[mlflow.pyfunc.PyFuncModel],
+) -> List[Dict[str, Any]]:
     """
     Convert the list of `mlflow.pyfunc.PyFuncModel` objects returned by
     `model.predict` into a plain Python list of dictionaries so that
     it can be used like a normal pandas row.
     """
     return [pred.model_dump() for pred in preds]
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # 5️⃣  Pipeline Golden‑Tests (mis à jour)
@@ -123,7 +126,9 @@ def run_golden_tests(
     # Non‑concordants
     err_ic_mean = golden.loc[err_mask, "IC"].mean()
     err_ic_median = golden.loc[err_mask, "IC"].median()
-    log.info(f"Non‑concordant IC – mean: {err_ic_mean:.4f}, median: {err_ic_median:.4f}")
+    log.info(
+        f"Non‑concordant IC – mean: {err_ic_mean:.4f}, median: {err_ic_median:.4f}"
+    )
 
     # Rapport
     concordance_rate = ok_mask.mean()
@@ -137,17 +142,22 @@ def run_golden_tests(
 
     upload_parquet(golden, f"{upload_uri}/golden_tests_results.parquet")
     upload_parquet(err_rows, f"{upload_uri}/golden_tests_error.parquet")
-    upload_parquet(ok_rows[["nace2025", "libelle", "CRT", "APE_prediction", "IC"]],
-                   f"{upload_uri}/golden_tests_ok.parquet")
+    upload_parquet(
+        ok_rows[["nace2025", "libelle", "CRT", "APE_prediction", "IC"]],
+        f"{upload_uri}/golden_tests_ok.parquet",
+    )
 
     log.debug(golden.head())
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 6️⃣  Main pipeline
 # ──────────────────────────────────────────────────────────────────────────────
+
+
 def main() -> None:
     # ── 1️⃣  Configure & download model ───────────────────────────────────────
-    MODEL_URI = "runs:/4f09a147df0f4226ba45b49ae3a5a853/pyfunc_model"
+    MODEL_URI = "runs:/a914950c907e4e95817aa3ffdfb4243a/pyfunc_model"
     dst_path = Path("../my_model").expanduser().resolve()
     download_mlflow_artifact(MODEL_URI, dst_path)
 
